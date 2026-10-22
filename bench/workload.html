@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>scry benchmark workload</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+    background: #0f172a; color: #f8fafc; overflow: hidden;
+  }
+  /* Always-on heads-up display, large enough to read on a phone slow-mo recording. */
+  #hud {
+    position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+    display: flex; gap: 28px; align-items: baseline;
+    padding: 14px 20px; background: rgba(0,0,0,.45);
+    font-variant-numeric: tabular-nums; font-size: 22px;
+  }
+  #hud b { font-size: 30px; font-weight: 700; }
+  #phase { color: #22c55e; font-weight: 600; }
+  #clock { color: #f0a030; }
+  .hint { margin-left: auto; color: #94a3b8; font-size: 15px; }
+  #stage { position: absolute; inset: 60px 0 0 0; overflow: hidden; }
+
+  /* Phase 2: dense scrolling text. */
+  #scroll { position: absolute; inset: 0; overflow: hidden; display: none; }
+  #scroll .col { position: absolute; top: 0; width: 100%; padding: 0 24px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 15px; line-height: 1.5; }
+  #scroll .col span:nth-child(3n) { color: #22c55e; }
+  #scroll .col span:nth-child(3n+1) { color: #60a5fa; }
+  #scroll .col span:nth-child(7n) { color: #f0a030; }
+
+  /* Phase 3: a box sweeping across. */
+  #motion { position: absolute; inset: 0; display: none; }
+  #box { position: absolute; top: 40%; width: 160px; height: 160px; border-radius: 16px;
+    background: #22c55e; box-shadow: 0 0 60px #22c55e88; }
+
+  /* Phase 4: full-screen flashes. */
+  #flash { position: absolute; inset: 0; display: none; }
+
+  #start {
+    position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 18px; background: #0f172a; text-align: center;
+  }
+  #start h1 { font-size: 40px; font-weight: 700; }
+  #start p { color: #94a3b8; font-size: 17px; max-width: 520px; }
+  #start button {
+    font: inherit; font-size: 18px; font-weight: 600; color: #071b12; cursor: pointer;
+    background: #22c55e; border: 0; border-radius: 12px; padding: 14px 28px;
+  }
+  kbd { background: #1b2336; border: 1px solid #334155; border-radius: 6px; padding: 2px 7px; font-size: 14px; }
+</style>
+</head>
+<body>
+  <div id="hud">
+    <span>t <b id="t">0.00</b>s</span>
+    <span id="phase">—</span>
+    <span>fps <b id="fps">0</b></span>
+    <span>frame <b id="frame">0</b></span>
+    <span id="clock">00:00.000</span>
+    <span class="hint">Space restart · F fullscreen</span>
+  </div>
+
+  <div id="stage">
+    <div id="scroll"><div class="col" id="col"></div></div>
+    <div id="motion"><div id="box"></div></div>
+    <div id="flash"></div>
+  </div>
+
+  <div id="start">
+    <h1>scry benchmark workload</h1>
+    <p>A fixed 30-second test so both clients run the exact same thing. Open this in Chrome on the
+       Cloud PC, press <kbd>F</kbd> for fullscreen, then <kbd>Space</kbd> to run. Do it once connected
+       with scry and once with Windows App, filming the window in slow-mo to compare.</p>
+    <button id="go">Start (Space)</button>
+    <p>Phases: idle → text scroll → moving box → full-screen flashes. Motion is time-based, so it is
+       identical regardless of the client's frame rate.</p>
+  </div>
+
+<script>
+  // Time-based schedule (seconds). Motion depends on elapsed time, not on frame count,
+  // so the workload is identical across clients and runs.
+  const PHASES = [
+    { name: 'IDLE (baseline)', end: 5,  show: null },
+    { name: 'TEXT SCROLL',     end: 13, show: 'scroll' },
+    { name: 'MOVING BOX',      end: 21, show: 'motion' },
+    { name: 'FULL FLASH',      end: 29, show: 'flash' },
+    { name: 'DONE',            end: 1e9, show: null },
+  ];
+  const DURATION = 29;
+
+  const $ = (id) => document.getElementById(id);
+  const scroll = $('scroll'), motion = $('motion'), flash = $('flash'), box = $('box'), col = $('col');
+
+  // Fill the scroll column with dense, colorful text (stresses the text/UI codec path).
+  (function fillText() {
+    let html = '';
+    for (let i = 0; i < 400; i++) {
+      html += `<span>${String(i).padStart(4,'0')}  node-${i%256}-${(i*7)%256}  region-${i%12}  status ok  benchmark line ${i} of the scrolling text workload</span><br>`;
+    }
+    col.innerHTML = html;
+  })();
+
+  let startMs = 0, running = false;
+  let frames = 0, fpsFrames = 0, fpsClock = 0, fps = 0;
+
+  function begin() {
+    $('start').style.display = 'none';
+    startMs = performance.now();
+    frames = 0; fpsFrames = 0; fpsClock = startMs;
+    running = true;
+    requestAnimationFrame(loop);
+  }
+
+  function setPhase(show) {
+    scroll.style.display = show === 'scroll' ? 'block' : 'none';
+    motion.style.display = show === 'motion' ? 'block' : 'none';
+    flash.style.display  = show === 'flash'  ? 'block' : 'none';
+  }
+
+  let lastShow = 'init';
+  function loop(now) {
+    if (!running) return;
+    const t = (now - startMs) / 1000;
+
+    // Current phase.
+    const phase = PHASES.find(p => t < p.end);
+    if (phase.show !== lastShow) { setPhase(phase.show); lastShow = phase.show; }
+
+    // Phase animations (time-based).
+    if (phase.show === 'scroll') {
+      const h = col.scrollHeight - scroll.clientHeight;
+      col.style.transform = `translateY(${-((t * 300) % Math.max(h, 1))}px)`;
+    } else if (phase.show === 'motion') {
+      const w = motion.clientWidth - box.offsetWidth;
+      const x = (Math.sin(t * 2) * 0.5 + 0.5) * w;            // smooth sweep
+      box.style.transform = `translateX(${x}px)`;
+      box.style.background = `hsl(${(t * 80) % 360} 80% 55%)`;
+    } else if (phase.show === 'flash') {
+      flash.style.background = (Math.floor(t * 4) % 2) ? '#f8fafc' : '#0f172a';  // 2 Hz
+    }
+
+    // HUD.
+    frames++; fpsFrames++;
+    if (now - fpsClock >= 500) { fps = Math.round(fpsFrames * 1000 / (now - fpsClock)); fpsFrames = 0; fpsClock = now; }
+    $('t').textContent = Math.min(t, DURATION).toFixed(2);
+    $('fps').textContent = fps;
+    $('frame').textContent = frames;
+    const ms = now % 60000;
+    $('clock').textContent = `${String(Math.floor(ms/1000)).padStart(2,'0')}:${String(Math.floor(ms%1000)).padStart(3,'0')}`;
+    $('phase').textContent = phase.name;
+
+    if (t >= DURATION && phase.name === 'DONE') {
+      running = false;
+      $('phase').textContent = `DONE · ${frames} frames · avg ${Math.round(frames / DURATION)} fps`;
+      return;
+    }
+    requestAnimationFrame(loop);
+  }
+
+  $('go').onclick = begin;
+  addEventListener('keydown', (e) => {
+    if (e.code === 'Space') { e.preventDefault(); begin(); }
+    else if (e.key === 'f' || e.key === 'F') {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(() => {});
+    }
+  });
+</script>
+</body>
+</html>

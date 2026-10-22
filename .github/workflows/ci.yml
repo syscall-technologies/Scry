@@ -1,0 +1,60 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Linux: winit (X11 + Wayland), arboard (xcb), and wgpu need these at build time.
+      # wry is not built on Linux (the sign-in falls back to the system browser), so no
+      # webkit2gtk/gtk is required here.
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libxcb1-dev \
+            libx11-dev libxrandr-dev libxi-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      # Match the rust-toolchain.toml pin so the action installs the right toolchain + components.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94"
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --all
+
+      - name: Release build
+        run: cargo build --release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scry-${{ matrix.os }}
+          path: |
+            target/release/scry
+            target/release/scry.exe
+          if-no-files-found: ignore

@@ -1,0 +1,51 @@
+[package]
+name = "scry"
+version = "0.1.0"
+edition = "2024"
+description = "Cross-platform client for a Windows 365 / AVD Cloud PC, drivable by AI agents (MCP) with a live viewer"
+
+[dependencies]
+anyhow = "1"
+arboard = "3"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+dirs = "6"
+image = { version = "0.25", default-features = false, features = ["png"] }
+ironrdp = { git = "https://github.com/Devolutions/IronRDP", rev = "c3dd17e", features = ["connector", "session", "graphics", "pdu", "input", "dvc", "displaycontrol", "cliprdr"] }
+ironrdp-blocking = { git = "https://github.com/Devolutions/IronRDP", rev = "c3dd17e" }
+ironrdp-egfx = { git = "https://github.com/Devolutions/IronRDP", rev = "c3dd17e", features = ["openh264-bundled"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rmcp = { version = "3.6", features = ["server", "macros", "transport-streamable-http-server", "schemars"] }
+roxmltree = "0.20"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+rsa = { version = "0.9", features = ["sha2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sspi = { version = "0.23", features = ["network_client"] }
+tiny_http = "0.12"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
+url = "2"
+webbrowser = "1"
+webpki-roots = "1"
+winit = { version = "0.30", features = ["rwh_06"] }
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+fontdue = "0.9.5"
+epaint_default_fonts = "0.35.0"
+tracing = "0.1"
+pixels = "0.17"
+eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+tao = "0.37"
+# Embedded sign-in web view (Linux would need GTK; it keeps the browser flow for now).
+wry = "0.57"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-app-kit = "0.2"
+objc2-foundation = "0.2"

@@ -1,0 +1,15 @@
+# Build output
+/target/
+/dist/
+
+# Generated images (keep the committed logo)
+*.png
+!docs/logo.png
+*.icns
+
+# Local debug logs and benchmark results
+*.log
+bench/results.csv
+
+# macOS
+.DS_Store
