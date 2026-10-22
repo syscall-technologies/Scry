@@ -32,6 +32,9 @@ jobs:
             libx11-dev libxrandr-dev libxi-dev \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
+      # H.264 (Fast graphics mode) compiles OpenH264 from source, which needs NASM on x86.
+      - uses: ilammy/setup-nasm@v1
+
       # Match the rust-toolchain.toml pin so the action installs the right toolchain + components.
       - uses: dtolnay/rust-toolchain@master
         with:
