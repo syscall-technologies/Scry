@@ -129,9 +129,21 @@ pub fn login() -> Result<()> {
     Ok(())
 }
 
-/// Embedded web view on macOS/Windows unless SCRY_LOGIN=browser; Linux uses the browser for now.
-fn use_webview() -> bool {
-    cfg!(any(target_os = "macos", target_os = "windows")) && std::env::var("SCRY_LOGIN").as_deref() != Ok("browser")
+/// Returns the redirect URL from an interactive sign-in: an embedded web view on macOS/Windows
+/// (unless SCRY_LOGIN=browser), the system browser otherwise. Linux has no web view, so it always
+/// uses the browser — which is also why this is cfg-split (the `weblogin` module isn't built there).
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn interactive_redirect(url: &Url) -> Result<String> {
+    if std::env::var("SCRY_LOGIN").as_deref() == Ok("browser") {
+        browser_sign_in(url)
+    } else {
+        crate::weblogin::sign_in(url.as_str())
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn interactive_redirect(url: &Url) -> Result<String> {
+    browser_sign_in(url)
 }
 
 /// Opens the default browser and reads the redirect URL back from the user.
@@ -169,11 +181,7 @@ fn interactive(scope: &str, extra: &[(&str, &str)]) -> Result<TokenResponse> {
         ],
     )?;
 
-    let line = if use_webview() {
-        crate::weblogin::sign_in(url.as_str())?
-    } else {
-        browser_sign_in(&url)?
-    };
+    let line = interactive_redirect(&url)?;
 
     let redirected = Url::parse(line.trim()).context("not a URL")?;
     let params: std::collections::HashMap<_, _> = redirected.query_pairs().into_owned().collect();
