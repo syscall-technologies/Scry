@@ -1,0 +1,66 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub Release and upload assets
+
+jobs:
+  release:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxkbcommon-dev libwayland-dev libxcb1-dev \
+            libx11-dev libxrandr-dev libxi-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+
+      - uses: ilammy/setup-nasm@v1
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release
+
+      # Package one asset per OS and record its name in $ASSET.
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          scripts/make-macos-app.sh
+          ditto -c -k --keepParent dist/scry.app scry-macos-arm64.zip
+          echo "ASSET=scry-macos-arm64.zip" >> "$GITHUB_ENV"
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          tar -czf scry-linux-x86_64.tar.gz -C target/release scry
+          echo "ASSET=scry-linux-x86_64.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/release/scry.exe -DestinationPath scry-windows-x86_64.zip
+          "ASSET=scry-windows-x86_64.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Publish to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: scry ${{ github.ref_name }}
+          files: ${{ env.ASSET }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true

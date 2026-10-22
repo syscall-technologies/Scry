@@ -39,11 +39,15 @@ viewer; an agent clicks, types, scrolls and reads the screen through MCP. Writte
 
 ## Quick start
 
-Build it (Rust 1.94+ — see [docs/BUILDING.md](docs/BUILDING.md) for system packages):
+Prebuilt binaries for macOS, Windows and Linux are attached to each
+[release](../../releases). Or build it yourself (Rust 1.94+ — see
+[docs/BUILDING.md](docs/BUILDING.md) for system packages):
 
 ```sh
 cargo build --release
 ```
+
+> Releases are cut by pushing a tag: `git tag v0.1.0 && git push --tags`.
 
 ### Desktop app (macOS)
 
