@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Linux: winit (X11 + Wayland), arboard (xcb), and wgpu need these at build time.
       # wry is not built on Linux (the sign-in falls back to the system browser), so no
@@ -54,7 +54,7 @@ jobs:
       - name: Release build
         run: cargo build --release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: scry-${{ matrix.os }}
           path: |
