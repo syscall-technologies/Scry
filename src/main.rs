@@ -11,6 +11,7 @@ mod keymap;
 mod keys;
 mod launcher;
 mod mcp;
+mod ocr;
 mod overlay;
 mod platform;
 mod probe;

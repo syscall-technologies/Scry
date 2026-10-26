@@ -26,6 +26,8 @@ const PROGRESS: u32 = 0x4caf50;
 const DOT_RUNNING: u32 = 0x4caf50;
 const DOT_PAUSED: u32 = 0xf0a030;
 const DOT_STOPPED: u32 = 0xe04a3c;
+const SELECTION: u32 = 0xe04a3c;
+const SELECTION_ALPHA: u32 = 50;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Button {
@@ -51,6 +53,24 @@ pub struct Rect {
 }
 
 impl Rect {
+    /// The rectangle spanned by two corner points (in either order).
+    pub fn from_corners(a: (usize, usize), b: (usize, usize)) -> Self {
+        Self {
+            x: a.0.min(b.0),
+            y: a.1.min(b.1),
+            w: a.0.abs_diff(b.0),
+            h: a.1.abs_diff(b.1),
+        }
+    }
+
+    pub fn origin(&self) -> (usize, usize) {
+        (self.x, self.y)
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.w, self.h)
+    }
+
     pub fn contains(&self, px: f64, py: f64) -> bool {
         px >= self.x as f64 && py >= self.y as f64 && px < (self.x + self.w) as f64 && py < (self.y + self.h) as f64
     }
@@ -66,6 +86,23 @@ pub fn visible(s: &Snapshot) -> bool {
 /// Banner height in physical pixels for the window scale factor.
 pub fn height(scale: usize) -> usize {
     BAR_H * scale
+}
+
+/// Draws the OCR selection (tinted area with a solid border) into an RGBA frame `frame_w` wide.
+/// `r` must lie within the frame.
+pub fn draw_selection(frame: &mut [u8], frame_w: usize, r: Rect, scale: usize) {
+    let border = scale;
+    for y in r.y..r.y + r.h {
+        for x in r.x..r.x + r.w {
+            let edge = x < r.x + border || y < r.y + border || x + border >= r.x + r.w || y + border >= r.y + r.h;
+            let i = (y * frame_w + x) * 4;
+            blend(
+                &mut frame[i..i + 3],
+                SELECTION,
+                if edge { 255 } else { SELECTION_ALPHA },
+            );
+        }
+    }
 }
 
 /// Blends 0xRRGGBB `color` over one RGBA pixel.

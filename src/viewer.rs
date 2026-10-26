@@ -5,6 +5,7 @@
 
 use crate::agent::Mode;
 use crate::keymap::map_key_code;
+use crate::ocr;
 use crate::overlay::{self, Button, Overlay, Rect};
 use crate::session::{Cursor, Handle};
 use anyhow::Result;
@@ -27,6 +28,9 @@ const BUTTON_COOLDOWN: Duration = Duration::from_millis(600);
 const RESIZE_SETTLE: Duration = Duration::from_millis(300);
 /// Trackpad pixels per wheel notch.
 const PIXELS_PER_NOTCH: f64 = 40.0;
+/// Smaller OCR selections (in frame pixels) are treated as a stray click and ignored.
+const MIN_SELECTION: usize = 4;
+const TITLE: &str = "scry - Cloud PC";
 
 struct App {
     handle: Handle,
@@ -49,6 +53,10 @@ struct App {
     /// Last remote-cursor sequence applied to the window.
     cursor_seq: u64,
     stats: RedrawStats,
+    /// ⌘⇧C armed an OCR selection: the next left drag is read as text instead of sent.
+    selecting: bool,
+    /// Frame point where that drag started.
+    select_start: Option<(usize, usize)>,
 }
 
 pub fn run(handle: Handle, width: u16, height: u16) -> Result<()> {
@@ -69,6 +77,8 @@ pub fn run(handle: Handle, width: u16, height: u16) -> Result<()> {
         pending_resize: None,
         cursor_seq: 0,
         stats: RedrawStats::from_env(),
+        selecting: false,
+        select_start: None,
     };
     let size = LogicalSize::new(f64::from(width), f64::from(height));
     event_loop.run_app(&mut AppWithSize { app: &mut app, size })?;
@@ -87,7 +97,7 @@ impl ApplicationHandler for AppWithSize<'_> {
             return;
         }
         let attrs = Window::default_attributes()
-            .with_title("scry - Cloud PC")
+            .with_title(TITLE)
             .with_inner_size(self.size)
             .with_resizable(true);
         let (bw, bh) = self.app.buffer_size;
@@ -168,6 +178,16 @@ impl App {
                 let PhysicalKey::Code(code) = event.physical_key else {
                     return;
                 };
+                if event.state == ElementState::Pressed && code == KeyCode::KeyC && self.cmd_shift_held() {
+                    self.start_selection();
+                    return;
+                }
+                if self.selecting && code == KeyCode::Escape {
+                    if event.state == ElementState::Pressed {
+                        self.end_selection();
+                    }
+                    return;
+                }
                 if event.state == ElementState::Pressed && code == KeyCode::KeyV && self.cmd_shift_held() {
                     self.type_local_clipboard();
                     return;
@@ -184,6 +204,9 @@ impl App {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = position;
+                if let (Some(_), Some((window, _))) = (self.select_start, &self.window) {
+                    window.request_redraw();
+                }
                 if self.on_banner() {
                     return;
                 }
@@ -199,6 +222,15 @@ impl App {
                 }
                 if state == ElementState::Released && self.swallow_release {
                     self.swallow_release = false;
+                    return;
+                }
+                if self.selecting {
+                    if button == WinitButton::Left {
+                        match state {
+                            ElementState::Pressed => self.select_start = self.cursor_in_frame(),
+                            ElementState::Released => self.finish_selection(),
+                        }
+                    }
                     return;
                 }
                 if state == ElementState::Pressed {
@@ -257,6 +289,10 @@ impl App {
     /// Applies the latest remote pointer as the window's cursor (shape, hidden or default).
     fn apply_cursor(&mut self, event_loop: &ActiveEventLoop) {
         let Some((window, _)) = &self.window else { return };
+        // Keep the crosshair while selecting; `end_selection` makes the next call reapply.
+        if self.selecting {
+            return;
+        }
         enum Apply {
             Hide,
             Shape(winit::window::CustomCursorSource),
@@ -365,11 +401,8 @@ impl App {
     /// only), for Cloud PCs where clipboard redirection is disabled.
     fn type_local_clipboard(&mut self) {
         // ⌘⇧ are already down on the Cloud PC: release them first, or every typed character would
-        // become a Win+Shift shortcut. Tapping Ctrl first stops the Win release from opening Start.
-        let ctrl = map_key_code(KeyCode::ControlLeft).expect("ctrl is mapped");
-        let mut ops = vec![Operation::KeyPressed(ctrl), Operation::KeyReleased(ctrl)];
-        ops.extend(self.pressed.drain().map(Operation::KeyReleased));
-        self.handle.send_input(ops);
+        // become a Win+Shift shortcut.
+        self.release_shortcut_keys();
 
         match arboard::Clipboard::new().and_then(|mut c| c.get_text()) {
             Ok(text) if !text.is_empty() => {
@@ -382,6 +415,77 @@ impl App {
             }
             _ => eprintln!("viewer: the local clipboard has no text to type"),
         }
+    }
+
+    /// Releases the keys of a local ⌘⇧ shortcut, which are already down on the Cloud PC. Tapping
+    /// Ctrl first stops the Win release from opening Start.
+    fn release_shortcut_keys(&mut self) {
+        let ctrl = map_key_code(KeyCode::ControlLeft).expect("ctrl is mapped");
+        let mut ops = vec![Operation::KeyPressed(ctrl), Operation::KeyReleased(ctrl)];
+        ops.extend(self.pressed.drain().map(Operation::KeyReleased));
+        self.handle.send_input(ops);
+    }
+
+    /// ⌘⇧C: arms a one-shot OCR selection (crosshair cursor; Esc cancels).
+    fn start_selection(&mut self) {
+        self.release_shortcut_keys();
+        self.selecting = true;
+        self.select_start = None;
+        if let Some((window, _)) = &self.window {
+            window.set_cursor(CursorIcon::Crosshair);
+            window.set_cursor_visible(true);
+        }
+    }
+
+    fn end_selection(&mut self) {
+        self.selecting = false;
+        self.select_start = None;
+        // Reapply the remote cursor on the next poll.
+        self.cursor_seq = u64::MAX;
+        if let Some((window, _)) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Reads the text in the dragged region (off the main thread) and puts it on the local clipboard.
+    fn finish_selection(&mut self) {
+        let corners = self.select_start.zip(self.cursor_in_frame());
+        self.end_selection();
+        let Some((start, end)) = corners else { return };
+        let rect = Rect::from_corners(start, end);
+        let ((x, y), (w, h)) = (rect.origin(), rect.size());
+        if w < MIN_SELECTION || h < MIN_SELECTION {
+            return;
+        }
+        let rgba = {
+            let frame = self.handle.frame().lock().expect("frame lock");
+            // The resolution may have changed since the selection was drawn.
+            if x + w > usize::from(frame.width) || y + h > usize::from(frame.height) {
+                eprintln!("ocr: the screen changed size during the selection; try again");
+                return;
+            }
+            ocr::crop(&frame.rgba, usize::from(frame.width), x, y, w, h)
+        };
+        let window = self.window.as_ref().map(|(w, _)| Arc::clone(w));
+        std::thread::spawn(move || {
+            if let Some(window) = &window {
+                window.set_title(&format!("{TITLE} (reading text…)"));
+            }
+            let result = ocr::read_text(&rgba, w as u32, h as u32);
+            if let Some(window) = &window {
+                window.set_title(TITLE);
+            }
+            match result {
+                Ok(text) if !text.is_empty() => {
+                    match arboard::Clipboard::new().and_then(|mut c| c.set_text(text.as_str())) {
+                        Ok(()) => eprintln!("ocr: copied {} line(s) to the local clipboard", text.lines().count()),
+                        Err(e) => eprintln!("ocr: could not set the local clipboard: {e}"),
+                    }
+                }
+                Ok(_) => eprintln!("ocr: no text found in the selection"),
+                Err(e) => eprintln!("ocr: {e:#}"),
+            }
+        });
     }
 
     /// Releases keys still held when the window loses focus (e.g. Cmd+Tab away).
@@ -408,6 +512,10 @@ impl App {
     /// Copies the latest frame into the GPU buffer, draws the banner on top and presents.
     fn redraw(&mut self) -> Result<()> {
         let overlay_scale = self.overlay_scale();
+        let selection = self
+            .select_start
+            .zip(self.cursor_in_frame())
+            .map(|(a, b)| Rect::from_corners(a, b));
         let Some((_, pixels)) = self.window.as_mut() else {
             return Ok(());
         };
@@ -433,6 +541,13 @@ impl App {
         } else {
             Vec::new()
         };
+        if let Some(r) = selection {
+            let ((x, y), (rw, rh)) = (r.origin(), r.size());
+            // Skip a selection left over from before a resolution change.
+            if x + rw <= w && y + rh <= h {
+                overlay::draw_selection(pixels.frame_mut(), w, r, overlay_scale);
+            }
+        }
         pixels.render()?;
         self.drawn_overlay = self.overlay_signature();
         self.stats.redrawn(started.elapsed());

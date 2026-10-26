@@ -39,6 +39,8 @@ epaint_default_fonts = "0.35.0"
 tracing = "0.1"
 pixels = "0.17"
 eframe = { version = "0.35", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
+ocrs = "0.13"
+rten = { version = "0.26", default-features = false, features = ["onnx_format"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 tao = "0.37"
@@ -49,3 +51,16 @@ wry = "0.57"
 objc2 = "0.5"
 objc2-app-kit = "0.2"
 objc2-foundation = "0.2"
+
+# OCR inference is unusably slow unoptimized; keep it fast in debug builds too.
+[profile.dev.package]
+ocrs.opt-level = 3
+rten.opt-level = 3
+rten-base.opt-level = 3
+rten-gemm.opt-level = 3
+rten-imageproc.opt-level = 3
+rten-onnx.opt-level = 3
+rten-parallel.opt-level = 3
+rten-simd.opt-level = 3
+rten-tensor.opt-level = 3
+rten-vecmath.opt-level = 3
